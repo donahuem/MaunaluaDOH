@@ -42,7 +42,7 @@ d <- mutate(d,logchla = log10(chla))
 d$FI[d$site==248]<-NA
 d$BIX[d$site==252]<-NA
 d$FI[d$site==251] <-NA
-
+#d$salinity[d$site==115]=35.16
 #save(d,)
 
 cols_phys <- c("depth","temp","salinity", "turbidity","TSS", "DO")
