@@ -10,7 +10,8 @@ library(MASS)
 library(ellipse)
 library(viridis)
 
-data <- read_csv("Data_MASTER_010719v8.csv")
+data <- read_csv("Data_MASTER_20200331_v9.csv")
+data <- mutate_at(data,vars(TSS:Chla,EnteroCFU100ml),as.numeric)
 
 #subset to data columns of use; reformat times and dates
 d <- dplyr::select(data, site=SiteNum,lat=LatGPS,long=LongGPS,date=Date,time=Time,team=Team,
@@ -37,18 +38,55 @@ d <- mutate(d,logchla = log10(chla))
 #high nutrient sites (N,P,Si):  267, 277,263 - likely to be real, close to SGD
 #high BIX: 252
 #high FI: 248
+#THE FOLLOWING WERE FIXED IN V9 OF DATASET
 #both FI(site=248) and BIX(site=252) are 10^4 larger than median have the exact value 65535; replace with NAs
 #FI(site=251) has an exact value of 0, which I think is impossible and no other fDOM measurement is zero; replace with NA
-d$FI[d$site==248]<-NA
-d$BIX[d$site==252]<-NA
-d$FI[d$site==251] <-NA
+#d$FI[d$site==248]<-NA
+#d$BIX[d$site==252]<-NA
+#d$FI[d$site==251] <-NA
 #d$salinity[d$site==115]=35.16
-#save(d,)
+
+#Benthic Cover Data
+benthic <- read_csv("PercentCovers_PM.csv")
+b <- dplyr::select(benthic,
+                   quad = 'Quadrad number',
+                   site = 'Site Number',
+                   coral = Coral,
+                   sand = Sand,
+                   silt = Silt,
+                   pavement = Pav,
+                   rock = Rock,
+                   unknown = Unk,
+                   a.spic = ASPIC,
+                   other.calc = CA_O,
+                   cca = CCA,
+                   algae.gfa = GFA,
+                   g.sal = GSAL,
+                   halimeda = Hal,
+                   turf = Turf,
+                   other.algae = UnkMacroa)
+#simplify so the variables of interest are:  
+#silt, sand, rock, pavement, coral, non-calcifying algae, calcifying non-crustose algae, cca, other
+#non-calcifying algae = Gracilaria salicornia, Acanthophora spicifera, turf, and other macroalgae
+#calcifying non-crustose = halimeda and padina (most of other.calc)
+b <- mutate(b, algae.nc = a.spic+algae.gfa+turf+other.algae,
+            algae.calc = halimeda+other.calc,
+            other = unknown)
+b.sum <- b %>% 
+         group_by(site) %>% 
+         summarise(silt=mean(silt),sand=mean(sand),rock=mean(rock),pavement=mean(pavement),
+                   coral=mean(coral),algae.nc=mean(algae.nc),algae.calc=mean(algae.calc),
+                   cca=mean(cca), other=mean(other))
+d <- left_join(d,b.sum, by="site")
+
+
+
 
 cols_phys <- c("depth","temp","salinity", "turbidity","TSS", "DO")
 #cols_bc1 <- c("pH","TA","logN","logtotN","logNH4","logtotP","logSi")
 cols_bc1 <- c("pH","TA","N","totN","NH4","totP","silicate")
 cols_bc2 <- c("chla","FCM","BIX","HIX","MC", "FI")
+cols_ben <- c("silt","sand","rock","pavement","coral","algae.nc","algae.calc","cca","other")
 cols_phrm <-  c("IBU","SMX","CBZ","GLY")
 cols_nph <- c(cols_phys,cols_bc1,cols_bc2)
 cols_drv <- c("dist2coast","distHK","otpN","sgd","streams")
