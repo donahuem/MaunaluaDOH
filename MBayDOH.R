@@ -79,8 +79,7 @@ b.sum <- b %>%
                    cca=mean(cca), other=mean(other))
 d <- left_join(d,b.sum, by="site")
 
-
-
+save(d,file="Datav9_plusbenthic.Rdata")
 
 cols_phys <- c("depth","temp","salinity", "turbidity","TSS", "DO")
 #cols_bc1 <- c("pH","TA","logN","logtotN","logNH4","logtotP","logSi")
