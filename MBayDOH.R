@@ -10,101 +10,147 @@ library(MASS)
 library(ellipse)
 library(viridis)
 
-data <- read_csv("Data_MASTER_20200331_v9.csv")
-data <- mutate_at(data,vars(TSS:Chla,EnteroCFU100ml),as.numeric)
+# Get water sample data -----------------------------------------------------
 
-#subset to data columns of use; reformat times and dates
-d <- dplyr::select(data, site=SiteNum,lat=LatGPS,long=LongGPS,date=Date,time=Time,team=Team,
-           benthic=Benthic, benthicpair=BenthicPair, clust = clusterfit,depth=Depth_FINAL,
-           temp=TempFinal,salinity=Salinity_Silbiger,DO=ODO,pcDO=ODOPerFinal,pH=pH_insitu_Silbiger,TA=TA_Raw_Silbiger,
-           chla=Chla,turbidity=Turb_Final,TSS=TSS,NH4=Ammonia,N=NNN,totN=TotalN,totP=TotalP,silicate=Silica,
-           FCM=`FCM_Concentration (cells/uL)`,BIX=fDOM_BIX,HIX=fDOM_HIX,FI=fDOM_FI,MC=`fDOM_M:C`,
-           IBU=IBU_ngmL,SMX=SMX_ngmL,CBZ=CBZ_ngmL,GLY=GLY_ngmL,
-           offshore=dist2coast,longshore=DistanceHK_m,otpN=otpN,sgd=gw_wells,streams=streams)
-d <- mutate(d,doh=0+1*(site>=1 & site<=160)+2*(site>=201 & site<=260))  #DOH offshore=1, DOH nearshore=2
-d <- mutate(d,date = ymd(date))
-d <- mutate(d,datetime = as.POSIXct(paste(d$date,d$time), format="%Y-%m-%d %H:%M:%S"))
-d <- mutate(d,sgdx = exp(-0.001*d$sgd))
-d <- mutate(d,streamsx = exp(-0.001*streams))
-d <- mutate(d,logN = log10(d$N))
-d <- mutate(d,logNH4 = log10(d$NH4))
-d <- mutate(d,logtotN = log10(d$totN))
-d <- mutate(d,logtotP = log10(d$totP))
-d <- mutate(d,logSi = log10(d$silicate))
-d <- mutate(d,logturb = log10(turbidity))
-d <- mutate(d,logchla = log10(chla))
+source("MBayDOH_curation.R")
 
-#Outliers
-#high nutrient sites (N,P,Si):  267, 277,263 - likely to be real, close to SGD
-#high BIX: 252
-#high FI: 248
-#THE FOLLOWING WERE FIXED IN V9 OF DATASET
-#both FI(site=248) and BIX(site=252) are 10^4 larger than median have the exact value 65535; replace with NAs
-#FI(site=251) has an exact value of 0, which I think is impossible and no other fDOM measurement is zero; replace with NA
-#d$FI[d$site==248]<-NA
-#d$BIX[d$site==252]<-NA
-#d$FI[d$site==251] <-NA
-#d$salinity[d$site==115]=35.16
+#ADD IN NEWER DATASET FROM KIM - V14
 
-#Benthic Cover Data
-benthic <- read_csv("PercentCovers_PM.csv")
-b <- dplyr::select(benthic,
-                   quad = 'Quadrad number',
-                   site = 'Site Number',
-                   coral = Coral,
-                   sand = Sand,
-                   silt = Silt,
-                   pavement = Pav,
-                   rock = Rock,
-                   unknown = Unk,
-                   a.spic = ASPIC,
-                   other.calc = CA_O,
-                   cca = CCA,
-                   algae.gfa = GFA,
-                   g.sal = GSAL,
-                   halimeda = Hal,
-                   turf = Turf,
-                   other.algae = UnkMacroa)
-#simplify so the variables of interest are:  
-#silt, sand, rock, pavement, coral, non-calcifying algae, calcifying non-crustose algae, cca, other
-#non-calcifying algae = Gracilaria salicornia, Acanthophora spicifera, turf, and other macroalgae
-#calcifying non-crustose = halimeda and padina (most of other.calc)
-b <- mutate(b, algae.nc = a.spic+algae.gfa+turf+other.algae,
-            algae.calc = halimeda+other.calc,
-            other = unknown)
-b.sum <- b %>% 
-         group_by(site) %>% 
-         summarise(silt=mean(silt),sand=mean(sand),rock=mean(rock),pavement=mean(pavement),
-                   coral=mean(coral),algae.nc=mean(algae.nc),algae.calc=mean(algae.calc),
-                   cca=mean(cca), other=mean(other))
-d <- left_join(d,b.sum, by="site")
+# Name useful subsets of variables ----------------------------------------
 
-save(d,file="Datav9_plusbenthic.Rdata")
+c.bgc <- c("depth","temp","salinity", "pcDO","pH","TA","turbidity","TSS")
+c.nuts <- c("logN","logtotN","logNH4","logtotP","logSi","chla")
+c.fdom <- c("logBIX","logHIX","logMC", "logFI")
+c.ben <- c("silt","sand","rock","pavement","coral","algae.nc","algae.calc","cca","other")
+c.phrm <-  c("IBU","SMX","CBZ","GLY")
+#data collected "everywhere"
+c.ew <- c("temp","salinity", "pcDO","pH","TA","logturb","logN","logtotN",
+          "logNH4","logtotP","logSi","logchla","logBIX","logHIX","logMC", "logFI")
+#all response vars
+c.all <- c(c.bgc,c.nuts,c.fdom,c.ben,c.phrm)
+#driver vars
+c.drv <- c("depth","offshore","longshore","otpN","sgd","streams")
+c.sgd <- c("temp","salinity","logSi","HIX")
+i.xtr <- d$site==267|d$site==277|d$site==263
 
-cols_phys <- c("depth","temp","salinity", "turbidity","TSS", "DO")
-#cols_bc1 <- c("pH","TA","logN","logtotN","logNH4","logtotP","logSi")
-cols_bc1 <- c("pH","TA","N","totN","NH4","totP","silicate")
-cols_bc2 <- c("chla","FCM","BIX","HIX","MC", "FI")
-cols_ben <- c("silt","sand","rock","pavement","coral","algae.nc","algae.calc","cca","other")
-cols_phrm <-  c("IBU","SMX","CBZ","GLY")
-cols_nph <- c(cols_phys,cols_bc1,cols_bc2)
-cols_drv <- c("dist2coast","distHK","otpN","sgd","streams")
-cols_sgd <- c("salinity","silicate","HIX")
-ind_xtr <- d$site==267|d$site==277
 
-#correlation plots
-# ggpairs(d,columns=cols_phys)
-# ggpairs(d,columns=cols_bc1)
-# ggpairs(d,columns=cols_bc2)
+#Clustering
+library(ade4)
+library(vegan)
+library(gclus)
+library(cluster)
+library(RColorBrewer)
+library(labdsv)
+#library(mvpart)
+#library(MVPARTwrap)
 
+#first, cluster with all sites using c.ew (vars measured everywhere)
+r.ew <- complete.cases(d[,c.ew])
+d.ew <- d[r.ew,c("site",c.ew)]
+ew.norm <- decostand(d.ew,"normalize")
+ew.stand <- decostand(d.ew,"standardize")
+ew.ch <- vegdist(ew.norm,"euc")
+
+#hierarchical clustering(single linkage agglomerative)
+ew.ch.single <- hclust(ew.ch, method="single")
+plot(ew.ch.single)
+ew.ch.single.cophen <- cophenetic(ew.ch.single)
+cor(ew.ch, ew.ch.single.cophen)  #.755
+gow.dist.single <- sum((ew.ch-ew.ch.single.cophen)^2) #15.14
+
+#complete linkage clustering
+ew.ch.complete <- hclust(ew.ch,method="complete")
+plot(ew.ch.complete)
+ew.ch.complete.cophen <- cophenetic(ew.ch.complete)
+cor(ew.ch, ew.ch.complete.cophen) #0.781
+gow.dist.complete <- sum((ew.ch-ew.ch.complete.cophen)^2) #24.5
+ew.complete.g6 <- cutree(ew.ch.complete,6)
+
+#UPGMA clustering (avg agglomerative)  -THIS LOOKS LIKE THE BEST FOR HIERARCHICAL
+ew.ch.UPGMA <- hclust(ew.ch, method="average")
+plot(ew.ch.UPGMA)
+ew.ch.UPGMA.cophen <- cophenetic(ew.ch.UPGMA)
+cor(ew.ch, ew.ch.UPGMA.cophen) #0.786
+gow.dist.UPGMA <- sum((ew.ch-ew.ch.UPGMA.cophen)^2)  #2.66
+#identify best number of groups for this method
+asw=numeric(nrow(d.ew))
+for(k in 2:(nrow(d.ew)-1)) {
+  sil <- silhouette(cutree(ew.ch.UPGMA,k=k),ew.ch)
+  asw[k] <- summary(sil)$avg.width
+}
+plot(1:nrow(d.ew),asw,type="h")
+ew.chwo <- reorder.hclust(ew.ch.UPGMA,ew.ch)
+ew.dend <- as.dendrogram(ew.chwo)
+ew.colorbydepth <- ifelse(d.ew$depth<=2,"cyan","blue")
+heatmap(as.matrix(ew.ch),Rowv=ew.dend, symm=TRUE,margin=c(3,3),RowSideColors=ew.colorbydepth)
+
+#min variance clustering (Ward)
+ew.ch.ward <- hclust(ew.ch, method="ward.D")
+plot(ew.ch.ward)
+ew.ch.ward.cophen <- cophenetic(ew.ch.ward)
+cor(ew.ch, ew.ch.ward.cophen)  #0.757
+sum((ew.ch-ew.ch.ward.cophen)^2)
+
+#k-means partitioning - normalized:  12 (or 14) groups
+ew.km.cascade <- cascadeKM(ew.norm,inf.gr=2,sup.gr=20,iter=100,criterion="ssi")
+plot(ew.km.cascade,sortg=TRUE)
+ew.kmeans <- kmeans(ew.norm, centers=12,nstart=100)
+d.ew[order(ew.kmeans$cluster),]
+
+#k-means partitioning - standardized
+ew.s.km.cascade <- cascadeKM(ew.stand,inf.gr=2,sup.gr=20,iter=100,criterion="ssi")
+plot(ew.s.km.cascade,sortg=TRUE)
+ew.s.kmeans <- kmeans(ew.stand, centers=13,nstart=100)
+d.ew[order(ew.kmeans$cluster),]
+
+
+
+#PAM clustering
+asw.pam <- numeric(nrow(d.ew))
+for (k in 2:(nrow(d.ew)/2)){
+  asw.pam[k] <- pam(ew.ch,k,diss=TRUE)$silinfo$avg.width
+  k.best <- which.max(asw.pam)
+  plot(1:nrow(d.ew),asw.pam,type="h")
+}
+
+#Compare Clusters from kmeans partitioning (12 groups)
+d.ew$km <- as.factor(ew.kmeans$cluster)
+d.ew.loc <- left_join(d.ew,d[,c("site","lat","long")])
+write.csv(d.ew.loc,"Data_EWloc_20210909.csv")
+
+d.ew.long <-
+  pivot_longer(d.ew,depth:logFI,names_to = "env_parm",values_to="env_data")
+
+d.ew.long %>% 
+  ggplot(aes(y=env_data)) +
+    facet_wrap(vars(env_parm),scales="free") +
+    geom_boxplot(aes(x=km, group=km,color=km))
+  
+d.ew.loc %>%  ggplot(aes(kw)) +
+  #scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
+  geom_point(mapping=aes(x=long,y=lat,color=km)) 
+
+
+# Correlation Plots -------------------------------------------------------
+pairs(d[(d$benthic==0 & !i.xtr),c.ew])
 e<- ggplot(data=d)
-e + geom_text(mapping=aes(x=log(N),y=log(BIX),label=site))
+e + geom_text(mapping=aes(x=logN,y=log(BIX),label=site))
 e + geom_text(mapping=aes(x=BIX,y=FI,label=site))
-e + geom_text(mapping=aes(x=log(totP),y=log(totN),label=site))
-e + geom_text(mapping=aes(x=log(N),y=log(totP),label=site))
-e + geom_text(mapping=aes(x=log(totP),y=log(silicate),label=site))
-e + geom_text(mapping=aes(x=log(N),y=log(NH4),label=site))
-e + geom_text(mapping=aes(x=log(turbidity),y=log(TSS),label=site))
+e + geom_text(mapping=aes(x=logtotP,y=logtotN,label=site))
+e + geom_text(mapping=aes(x=logN,y=logtotN,label=site))
+e + geom_text(mapping=aes(x=logN,y=logtotP,label=site))
+e + geom_text(mapping=aes(x=logtotP,y=logSi,label=site))
+e + geom_text(mapping=aes(x=logtotN,y=NH4,label=site))
+e + geom_text(mapping=aes(x=logturb,y=log(TSS),label=site))
+e + geom_text(mapping=aes(x=logturb,y=silt,label=site))
+e + geom_text(mapping=aes(x=DO,y=pcDO,label=site))
+e + geom_text(mapping=aes(x=TA,y=pH,label=site))
+e + geom_text(mapping=aes(x=TA,y=pH,label=site))
+
+ei <- ggplot(data=d[!i.xtr,])
+ei + geom_text(mapping=aes(x=logtotN,y=NH4,label=site))
+
+# Histograms and maps of vars from DOH points ------------------------------------------------------
 
 #DOH map for nitrogen
 #plot log10(N) transform and histogram
@@ -128,7 +174,18 @@ filter(d, (doh>0)) %>%
 filter(d, (doh>0)) %>%
   ggplot() +
   scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
-  geom_point(mapping=aes(x=long,y=lat,color=logN))
+  geom_point(mapping=aes(x=long,y=lat,color=logtotP))
+
+#DOH map for NH4
+#log transform and histogram
+filter(d, (doh>0)) %>%
+  ggplot() + 
+  geom_histogram(aes(NH4))
+#no exclusions
+filter(d, (doh>0)) %>%
+  ggplot() +
+  scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
+  geom_point(mapping=aes(x=long,y=lat,color=NH4))
 
 #DOH map for silicate
 #log transform and histogram
@@ -136,7 +193,7 @@ filter(d, (doh>0)) %>%
   ggplot() + 
   geom_histogram(aes(logSi,color=doh))
 #exclude logSi >3 (?)
-filter(d, (doh>0 & logSi < 2.3)) %>%
+filter(d, (doh>0)) %>%  # && logSi > 2.3)) %>%
   ggplot() +
   scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
   geom_point(mapping=aes(x=long,y=lat,color=logSi))
@@ -151,6 +208,17 @@ filter(d, (doh>0)) %>%
   ggplot() +
   scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
   geom_point(mapping=aes(x=long,y=lat,color=logturb))
+
+#DOH map for TSS
+#log transform and histogram
+filter(d, (doh>0 & TSS>5)) %>%
+  ggplot() + 
+  geom_histogram(aes(log(TSS))) 
+
+filter(d, (doh>0 & TSS>5)) %>%
+  ggplot() +
+  scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
+  geom_point(mapping=aes(x=long,y=lat,color=log(TSS)))
 
 #DOH map for chla
 #log transform and histogram
@@ -167,13 +235,40 @@ filter(d, (doh>0)) %>%
 #log transform and histogram
 filter(d, (doh>0)) %>%
   ggplot() + 
-  geom_histogram(aes(HIX)) 
+  geom_histogram(aes(log(HIX))) 
 
-filter(d, (doh>0 & HIX<3)) %>%
+filter(d, (doh>0)) %>%
   ggplot() +
   scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
-  geom_point(mapping=aes(x=long,y=lat,color=HIX))
+  geom_point(mapping=aes(x=long,y=lat,color=log(HIX)))
 
+#map for BIX,HIX, FI
+filter(d, doh>0) %>% 
+  ggplot() + 
+  scale_color
+
+
+#DOH map for pcDO
+#log transform and histogram
+filter(d, (doh>0)) %>%
+  ggplot() + 
+  geom_histogram(aes(pcDO)) 
+
+filter(d, (doh>0)) %>%
+  ggplot() +
+  scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
+  geom_point(mapping=aes(x=long,y=lat,color=pcDO))
+
+#DOH map for DO
+#log transform and histogram
+filter(d, (doh>0)) %>%
+  ggplot() + 
+  geom_histogram(aes(DO)) 
+
+filter(d, (doh>0)) %>%
+  ggplot() +
+  scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
+  geom_point(mapping=aes(x=long,y=lat,color=DO))
 
 #DOH map for salinity
 #log transform and histogram
@@ -188,39 +283,88 @@ filter(d, (doh>0 & salinity>30)) %>%
   filter(d, (doh>0 & salinity<30)) %>%
   geom_text(mapping=aes(x=long,y=lat,label="x"))
 
+#Map for silt
+
+filter(d, (doh>0)) %>%
+  ggplot() + 
+  geom_histogram(aes(silt)) 
+
+filter(d, (doh>0)) %>%
+  ggplot() +
+  scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
+  geom_point(mapping=aes(x=long,y=lat,color=silt))
+
+filter(d, (doh>0 & benthic==0)) %>%
+  ggplot() +
+  scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
+  geom_point(mapping=aes(x=d$long,y=d$lat,color=(!is.na(d$GLY))*1))
+
+#Map for depth
+
+filter(d, (doh>0)) %>%
+  ggplot() + 
+  geom_histogram(aes(depth)) 
+
+filter(d, (doh>0 & benthic==0)) %>%
+  ggplot() +
+  scale_colour_viridis(option = "D",direction=-1,begin =0.15,end=0.85) +
+  geom_point(mapping=aes(x=long,y=lat,color=depth))
+
+# Calculate distance matrices ---------------------------------------------
+
 #Create distance matrices& clusters for columns 9:36, excluding pharms
-ind<-complete.cases(d[,cols_nph])
-d.euclid <- vegdist(d[ind,cols_nph],method="euclidean")
+ind<-complete.cases(d[,c.ew])
+
+d.euclid <- vegdist(d[ind,c.ew],method="euclidean")
 clust.euclid <-hclust(d.euclid)
 plot(clust.euclid,labels=d$site[ind],cex=0.5)
 
-d.scl.eu <- vegdist(scale(d[ind,cols_nph]),method="euclidean")
+d.scl.eu <- vegdist(scale(d[ind,c.ew]),method="euclidean")
 clust.scl.eu <- hclust(d.scl.eu)
 plot(clust.scl.eu,labels=d$site[ind],cex=0.5)
 
-d.bray <- vegdist(d[ind,cols_nph],method="bray",na.rm=TRUE)
+d.bray <- vegdist(d[ind,c.ew],method="bray",na.rm=TRUE)
 clust.bray <- hclust(d.bray)
 plot(clust.bray,labels=d$site[ind],cex=0.5)
 
-#Exclude Benthic
-ind_nb<-complete.cases(d[,cols_nph])&(d$benthic==0)
-d.nb.euclid <- vegdist(d[ind_nb,cols_nph],method="euclidean")
+#PCA including benthic
+d.pca <- rda(scale(d[ind,c.ew]),scale=TRUE)
+summary(d.pca)
+
+biplot(d.pca,scaling=1,display=c("sites","species"),type=c("text","points"))
+
+
+#Exclude Bottom Samples
+ind_nb<-complete.cases(d[,c.ew])&(d$benthic==0)
+d.nb.euclid <- vegdist(d[ind_nb,c.ew],method="euclidean")
 clust.nb.euclid <-hclust(d.nb.euclid)
 plot(clust.nb.euclid,labels=d$site[ind_nb],cex=0.5)
 
-d.nb.scl.eu <- vegdist(scale(d[ind_nb,cols_nph]),method="euclidean")
+d.nb.scl.eu <- vegdist(scale(d[ind_nb,c.ew]),method="euclidean")
 clust.nb.scl.eu <- hclust(d.nb.scl.eu)
 plot(clust.nb.scl.eu,labels=d$site[ind_nb],cex=0.5)
 
-d.nb.bray <- vegdist(d[ind_nb,cols_nph],method="bray",na.rm=TRUE)
+d.nb.bray <- vegdist(d[ind_nb,c.ew],method="bray",na.rm=TRUE)
 clust.nb.bray <- hclust(d.nb.bray)
 plot(clust.nb.bray,labels=d$site[ind_nb],cex=0.5)
 
 #PCA excluding benthic
-d.nb.pca <- rda(scale(d[ind_nb,cols_nph]),scale=TRUE)
+d.nb.pca <- rda(scale(d[ind_nb,c.ew]),scale=TRUE)
 summary(d.nb.pca)
 
 biplot(d.nb.pca,scaling=1,display=c("sites","species"),type=c("text","points"))
+#note - very little difference with and without bottom samples
+
+#PCA on only fdom
+d.fdom.pca <- rda(scale(d[ind_nb,c.fdom]),scale=TRUE)
+summary(d.fdom.pca)
+biplot(d.fdom.pca,scaling=1,display=c("sites","species"),type=c("text","points"))
+#MC and HIX are pretty inverse
+
+d.fdom.pca <- rda(scale(d[ind_nb,c("logHIX","logBIX","logFI")]),scale=TRUE)
+summary(d.fdom.pca)
+biplot(d.fdom.pca,scaling=1,display=c("sites","species"),type=c("text","points"))
+
 
 #par(mfrow = c(3,2))
 for (i in seq(1,4)){
@@ -235,7 +379,7 @@ for (i in seq(1,4)){
 
 #NMDS
 indexR <- ind_nb
-d.nb.nmds <- metaMDS(d[indexR,cols_nph],distance = "bray")
+d.nb.nmds <- metaMDS(d[indexR,c.ew],distance = "bray")
 par(mfrow=c(1,1))
 stressplot(d.nb.nmds,main="Shepard plot")
 gof=goodness(d.nb.nmds)
@@ -257,7 +401,7 @@ for (i in 1:length(grp.lev)){
 #we consider 4 explanatory variables:  dist2coast, distHK, sgd, otpN, streams
 #we consider all RVs except pharmaceuticals (cols_nph),then physical vars (cols_phys),
 #  and biochem vars (bc1 = nuts+carbonate chem, bc2=cells + fDOM), and pharma
-rda.nph <- rda(scale(d[ind_nb,cols_nph]) ~ d$sgdx[ind_nb]+d$otpN[ind_nb] + d$streamsx[ind_nb]
+rda.nph <- rda(scale(d[ind_nb,c.ew]) ~ d$sgdx[ind_nb]+d$otpN[ind_nb] + d$streamsx[ind_nb]
                +d$offshore[ind_nb] + d$longshore[ind_nb])
 summary(rda.nph)
 RsquareAdj(rda.nph)$r.squared
@@ -265,12 +409,12 @@ plot(rda.nph,scaling=1,main="Triplot RDA rda.nph")
 
 ###RDA FIGURES FOR OCEAN SCIENCES (toggle indices for nearshore and pharm plots)
 #index for nearshore sites (exclude Kim's clusters 2,11)
-ind_near<-complete.cases(d[,cols_nph])&(d$benthic==0)&(d$clust!=2)&(d$clust!=11)
+ind_near<-complete.cases(d[,c.ew])&(d$benthic==0) #&(d$clust!=2)&(d$clust!=11)
 #index for pharm sites
-ind_phrm <-complete.cases(d[,cols_phrm])&(d$benthic==0)
+ind_phrm <-complete.cases(d[,c.phrm])&(d$benthic==0)
 
-indexR=ind_phrm #ind_near
-indexC=cols_phrm#cols_nph
+indexR= ind_near #ind_phrm #
+indexC= c.ew #c.phrm#
 yRDA <- data.frame(scale(d[indexR,indexC]))
 xRDA <- data.frame(SGD=d$sgdx[indexR],OSDS=d$otpN[indexR],STREAM=d$streamsx[indexR],
                    OFFSHORE=d$offshore[indexR], LONGSHORE=d$longshore[indexR])
@@ -290,18 +434,18 @@ detach(xRDA)
 ##Linear Discriminant Analysis using Kim's clusters
 #Back to using sites that exclude bottom (ind_nb) and all non-pharm sites
 indexR <- ind_near
-indexC <- cols_nph
+indexC <- c.ew
 
-xLDA <- data.frame(d[indexR,cols_nph])
+xLDA <- data.frame(d[indexR,c.ew])
 xLDA$logN <- log(xLDA$N)
 xLDA$logNH4 <- log(xLDA$NH4)
 xLDA$logtotN <- log(xLDA$totN)
 xLDA$logtotP <- log(xLDA$totP)
 xLDA$logsi <- log(xLDA$silicate)
 xLDA <-data.frame(scale(xLDA),na.rm=TRUE)
-mod.lda <- lda(d$clust[indexR]~depth+temp+salinity+turbidity+TSS+DO+
-                              pH+TA+logN+logtotN+logNH4+logtotP+logsi+
-                              FCM+BIX+HIX+MC,data=xLDA)
+mod.lda <- lda(d$clust[indexR]~depth+temp+salinity+pcDO+pH+TA+turbidity+TSS+
+                              logN+logtotN+logNH4+logtotP+logSi+chla+
+                              FCM+BIX+HIX+MC+FI,data=xLDA)
 Cs <- mod.lda$scaling #normalized eigenvectors
 mod.lda$svd^2 #canonical eigenvalues
 (Fp <- predict(mod.lda)$x)
